@@ -91,7 +91,8 @@ func RejectUpload(ctx context.Context, auth *nostr.Event, size int, ext string) 
 	return false, "", http.StatusOK
 }
 
-// todo: can we handle it better?
+// RejectFilter guards gift-wrapped (kind 1059) reads: the client must be
+// NIP-42 authenticated and may only ask for wraps addressed to itself.
 func RejectFilter(ctx context.Context, filter nostr.Filter) (reject bool, msg string) {
 	if !slices.Contains(filter.Kinds, nostr.KindGiftWrap) {
 		return false, ""
@@ -102,17 +103,48 @@ func RejectFilter(ctx context.Context, filter nostr.Filter) (reject bool, msg st
 		return true, "auth-required: you are reading gift-wrapped events"
 	}
 
-	if len(filter.Tags) != 1 {
-		return true, "error: you can read your gift-wrapped events only"
+	ps := filter.Tags["p"]
+	if len(ps) == 0 {
+		return true, "restricted: you can read your gift-wrapped events only"
 	}
 
-	if !(len(filter.Tags["#p"]) >= 2) {
-		return true, "error: invalid p tag"
-	}
-
-	if filter.Tags["#p"][1] != auth {
-		return true, "restricted: you can read people DMs"
+	for _, pk := range ps {
+		if pk != auth {
+			return true, "restricted: you can't read other people's DMs"
+		}
 	}
 
 	return false, ""
+}
+
+// HideGiftWraps wraps a query function so that gift-wrapped events are only
+// returned to the authenticated recipient, whatever filter was used.
+func HideGiftWraps(q func(context.Context, nostr.Filter) (chan *nostr.Event, error)) func(context.Context, nostr.Filter) (chan *nostr.Event, error) {
+	return func(ctx context.Context, filter nostr.Filter) (chan *nostr.Event, error) {
+		in, err := q(ctx, filter)
+		if err != nil || in == nil {
+			return in, err
+		}
+		auth := khatru.GetAuthed(ctx)
+		out := make(chan *nostr.Event)
+		go func() {
+			defer close(out)
+			for ev := range in {
+				if ev.Kind == nostr.KindGiftWrap {
+					tag := ev.Tags.GetFirst([]string{"p", ""})
+					if auth == "" || tag == nil || (*tag)[1] != auth {
+						continue
+					}
+				}
+				select {
+				case out <- ev:
+				case <-ctx.Done():
+					for range in {
+					}
+					return
+				}
+			}
+		}()
+		return out, nil
+	}
 }

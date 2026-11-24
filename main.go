@@ -85,7 +85,7 @@ func main() {
 	}
 
 	relay.StoreEvent = append(relay.StoreEvent, badgerDB.SaveEvent, blugeDB.SaveEvent, StoreEvent)
-	relay.QueryEvents = append(relay.QueryEvents, blugeDB.QueryEvents, badgerDB.QueryEvents)
+	relay.QueryEvents = append(relay.QueryEvents, HideGiftWraps(blugeDB.QueryEvents), HideGiftWraps(badgerDB.QueryEvents))
 	relay.DeleteEvent = append(relay.DeleteEvent, badgerDB.DeleteEvent, blugeDB.DeleteEvent)
 	relay.ReplaceEvent = append(relay.ReplaceEvent, badgerDB.ReplaceEvent, blugeDB.ReplaceEvent)
 	relay.CountEvents = append(relay.CountEvents, badgerDB.CountEvents)
