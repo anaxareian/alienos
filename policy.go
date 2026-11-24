@@ -20,7 +20,7 @@ func RejectEvent(ctx context.Context, event *nostr.Event) (reject bool, msg stri
 
 	if config.WhiteListedPubkey {
 		_, allowed := management.AllowedPubkeys[event.PubKey]
-		if !allowed {
+		if !allowed && !giftWrapForMember(event) {
 			return true, "restricted: you are not allowed"
 		}
 	}
@@ -147,4 +147,26 @@ func HideGiftWraps(q func(context.Context, nostr.Filter) (chan *nostr.Event, err
 		}()
 		return out, nil
 	}
+}
+
+// giftWrapForMember reports whether event is a NIP-59 gift wrap (kind 1059)
+// addressed only to whitelisted pubkeys. Gift wraps are signed by a random
+// one-time key, so the author whitelist can never match them; instead we
+// accept a wrap when every recipient it names is a member of this relay.
+// Caller must hold the management lock.
+func giftWrapForMember(event *nostr.Event) bool {
+	if event.Kind != nostr.KindGiftWrap {
+		return false
+	}
+	found := false
+	for _, t := range event.Tags {
+		if len(t) < 2 || t[0] != "p" {
+			continue
+		}
+		if _, ok := management.AllowedPubkeys[t[1]]; !ok {
+			return false
+		}
+		found = true
+	}
+	return found
 }
