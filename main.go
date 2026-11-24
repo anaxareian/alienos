@@ -134,6 +134,10 @@ func main() {
 	bl.DeleteBlob = append(bl.DeleteBlob, blobStorage.Delete)
 	bl.ReceiveReport = append(bl.ReceiveReport, ReceiveReport)
 
+	// BUD-08: add nip94 tags to upload/mirror descriptors.
+	bud08LoadBlob = blobStorage.Load
+	RegisterBUD08(relay.Router())
+
 	LoadManagement()
 
 	for _, admin := range config.Admins {
