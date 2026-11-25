@@ -374,7 +374,7 @@ func Generic(ctx context.Context, request nip86.Request) (nip86.Response, error)
 		}
 
 		if err := setNIP05(pk, name); err != nil {
-			return nip86.Response{}, nil
+			return nip86.Response{}, err
 		}
 
 		go sendNotification(fmt.Sprintf("New NIP-05 has been set.\nName: %s\nPubkey: %s", name,
@@ -395,7 +395,7 @@ func Generic(ctx context.Context, request nip86.Request) (nip86.Response, error)
 		}
 
 		if err := unSetNIP05(name); err != nil {
-			return nip86.Response{}, nil
+			return nip86.Response{}, err
 		}
 
 		go sendNotification(fmt.Sprintf("NIP-05 has been unset.\nName: %s", name))
