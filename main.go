@@ -57,7 +57,7 @@ func main() {
 	relay.Info.Version = StringVersion()
 	relay.Info.Software = "https://github.com/dezh-tech/alienos"
 
-	relay.Info.AddSupportedNIPs([]int{1, 9, 11, 17, 40, 42, 50, 56, 59, 70, 86})
+	relay.Info.AddSupportedNIPs([]int{1, 5, 9, 11, 17, 40, 42, 50, 56, 59, 70, 86})
 
 	relay.OnConnect = append(relay.OnConnect, func(_ context.Context) {
 		liveConnections++
