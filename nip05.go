@@ -2,8 +2,11 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
+	"io/fs"
 	"net/http"
 	"path"
+	"sync"
 	"time"
 )
 
@@ -12,39 +15,47 @@ type Cache struct {
 	lastSeen time.Time
 }
 
-var cache = *new(map[string]Cache)
+var (
+	cache   = make(map[string]Cache)
+	cacheMu sync.Mutex
+	fileMu  sync.Mutex
+)
 
 type Response struct {
 	Names  map[string]string   `json:"names"`
 	Relays map[string][]string `json:"relays"`
 }
 
-func NIP05Handler(w http.ResponseWriter, r *http.Request) {
-	name := r.URL.Query().Get("name")
+func nip05Path() string {
+	return path.Join(config.WorkingDirectory, "/nip05.json")
+}
 
+func NIP05Handler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	name := r.URL.Query().Get("name")
 	if name == "" {
 		http.Error(w, "Missing query parameter 'name'", http.StatusBadRequest)
 		return
 	}
 
+	cacheMu.Lock()
 	c, exist := cache[name]
 	if exist {
 		c.lastSeen = time.Now()
+		cache[name] = c
+	}
+	cacheMu.Unlock()
 
+	if exist {
 		_ = json.NewEncoder(w).Encode(c.resp)
-
 		return
 	}
 
-	doc := loadNIP05()
-	if doc == nil {
+	doc, err := loadNIP05()
+	if err != nil {
 		http.Error(w, "Something went wrong", http.StatusInternalServerError)
 		return
-	}
-
-	resp := Response{
-		Names:  make(map[string]string, 1),
-		Relays: make(map[string][]string, 1),
 	}
 
 	pubKey, ok := doc.Names[name]
@@ -53,82 +64,92 @@ func NIP05Handler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp.Names[name] = pubKey
-
-	relays, ok := doc.Relays[pubKey]
-	if ok {
+	resp := Response{
+		Names:  map[string]string{name: pubKey},
+		Relays: make(map[string][]string, 1),
+	}
+	if relays, ok := doc.Relays[pubKey]; ok {
 		resp.Relays[pubKey] = relays
 	}
 
-	cache[name] = Cache{
-		lastSeen: time.Now(),
-		resp:     resp,
-	}
+	cacheMu.Lock()
+	cache[name] = Cache{lastSeen: time.Now(), resp: resp}
+	cacheMu.Unlock()
 
 	_ = json.NewEncoder(w).Encode(resp)
 }
 
-func loadNIP05() *Response {
-	resp := new(Response)
-	data, err := ReadFile(path.Join(config.WorkingDirectory, "/nip05.json"))
-	if err != nil {
-		return nil
+// loadNIP05 reads nip05.json; a missing file is treated as an empty document.
+func loadNIP05() (*Response, error) {
+	resp := &Response{}
+
+	data, err := ReadFile(nip05Path())
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return nil, err
+	}
+	if err == nil && len(data) > 0 {
+		if err := json.Unmarshal(data, resp); err != nil {
+			return nil, err
+		}
 	}
 
-	if err := json.Unmarshal(data, resp); err != nil {
-		return nil
+	if resp.Names == nil {
+		resp.Names = make(map[string]string)
+	}
+	if resp.Relays == nil {
+		resp.Relays = make(map[string][]string)
 	}
 
-	return resp
+	return resp, nil
 }
 
-func setNIP05(pubkey, name string) error {
-	resp := new(Response)
-	data, err := ReadFile(path.Join(config.WorkingDirectory, "/nip05.json"))
+func saveNIP05(resp *Response) error {
+	data, err := json.Marshal(resp)
 	if err != nil {
 		return err
 	}
+	return WriteFile(nip05Path(), data)
+}
 
-	if err := json.Unmarshal(data, resp); err != nil {
+func dropCache(name string) {
+	cacheMu.Lock()
+	delete(cache, name)
+	cacheMu.Unlock()
+}
+
+func setNIP05(pubkey, name string) error {
+	fileMu.Lock()
+	defer fileMu.Unlock()
+
+	resp, err := loadNIP05()
+	if err != nil {
 		return err
 	}
 
 	resp.Names[name] = pubkey
-
-	data, err = json.Marshal(resp)
-	if err != nil {
+	if err := saveNIP05(resp); err != nil {
 		return err
 	}
 
-	if err := WriteFile(path.Join(config.WorkingDirectory, "/nip05.json"), data); err != nil {
-		return err
-	}
-
+	dropCache(name)
 	return nil
 }
 
 func unSetNIP05(name string) error {
-	resp := new(Response)
-	data, err := ReadFile(path.Join(config.WorkingDirectory, "/nip05.json"))
-	if err != nil {
-		return err
-	}
+	fileMu.Lock()
+	defer fileMu.Unlock()
 
-	if err := json.Unmarshal(data, resp); err != nil {
+	resp, err := loadNIP05()
+	if err != nil {
 		return err
 	}
 
 	delete(resp.Names, name)
-
-	data, err = json.Marshal(resp)
-	if err != nil {
+	if err := saveNIP05(resp); err != nil {
 		return err
 	}
 
-	if err := WriteFile(path.Join(config.WorkingDirectory, "/nip05.json"), data); err != nil {
-		return err
-	}
-
+	dropCache(name)
 	return nil
 }
 
@@ -137,10 +158,12 @@ func checkCache() {
 	defer ticker.Stop()
 
 	for range ticker.C {
+		cacheMu.Lock()
 		for name, c := range cache {
 			if time.Since(c.lastSeen) >= time.Hour {
 				delete(cache, name)
 			}
 		}
+		cacheMu.Unlock()
 	}
 }
